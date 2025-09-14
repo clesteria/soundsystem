@@ -1,3 +1,9 @@
 nimcache/
 nimblecache/
 htmldocs/
+bin/
+nimble.develop
+nimble.paths
+public/wasm/
+*.app/
+.DS_Store
