@@ -8,7 +8,7 @@ import math
 
 const
   SampleRate* = 44100
-  MaxChannel = 4
+  MaxChannel* = 4
   WaveSize = 32
   Notes = {
     'C': 261.63,
@@ -117,6 +117,22 @@ proc initChannels*() =
   channels[3].wave = makeSawWave() # ノコギリ波
   channels[3].vol = 0.3
 
+## 音符の長さを取得
+proc getNoteLength(mml: string, idx: var int, defaultLen: int): int =
+  result = defaultLen
+  if idx + 1 < mml.len and mml[idx+1].isDigit:
+    let numStr = $mml[idx+1]
+    try:
+      result = parseInt(numStr)
+      inc idx
+    except ValueError:
+      # パース失敗時はdefaultLenのまま
+      discard
+
+## 音符のデュレーションを計算
+proc getDuration(bpm, len: int): int =
+  (SampleRate * 60 div bpm) * 4 div len
+
 ## MMLのパース
 proc parseMML*(mml: string): seq[NoteEvent] =
   var
@@ -129,28 +145,28 @@ proc parseMML*(mml: string): seq[NoteEvent] =
     let c = mml[i]
     case c:
     of 'A', 'B', 'C', 'D', 'E', 'F', 'G': # 音符
-      var len = defaultLen
-      if i+1 < mml.len and mml[i+1].isDigit:
-        len = parseInt($mml[i+1])
-        inc i
+      let len = getNoteLength(mml, i, defaultLen)
       let freq = Notes[c] * pow(2.0, (octave - 4).float)
-      let dur = (SampleRate * 60 div bpm) * 4 div len
+      let dur = getDuration(bpm, len)
       result.add NoteEvent(freq: freq, length: dur)
     of 'R': # 休符
-      var len = defaultLen
-      if i+1 < mml.len and mml[i+1].isDigit:
-        len = parseInt($mml[i+1])
-        inc i
-      let dur = (SampleRate * 60 div bpm) * 4 div len
+      let len = getNoteLength(mml, i, defaultLen)
+      let dur = getDuration(bpm, len)
       result.add NoteEvent(freq: 0, length: dur)
     of 'O': # オクターブ指定
       if i+1 < mml.len and mml[i+1].isDigit:
-        octave = parseInt($mml[i+1])
-        inc i
+        try:
+          octave = parseInt($mml[i+1])
+          inc i
+        except ValueError:
+          discard
     of 'L': # デフォ長
       if i+1 < mml.len and mml[i+1].isDigit:
-        defaultLen = parseInt($mml[i+1])
-        inc i
+        try:
+          defaultLen = parseInt($mml[i+1])
+          inc i
+        except ValueError:
+          discard
     of 'T': # テンポ
       var num = ""
       var j = i+1
@@ -158,7 +174,10 @@ proc parseMML*(mml: string): seq[NoteEvent] =
         num.add mml[j]
         inc j
       if num.len > 0:
-        bpm = parseInt(num)
+        try:
+          bpm = parseInt(num)
+        except ValueError:
+          discard
       i = j-1
     of '<':
       dec octave
