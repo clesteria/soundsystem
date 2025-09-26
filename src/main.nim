@@ -28,6 +28,7 @@ proc main () =
   sequence[1] = parseMML("T120 O4 L16 C R C R") # Ch4 (Pulse50, リズム刻み)
   sequence[2] = parseMML("T120 O4 L8  G R G G  A R G G  F R F F") # Ch2 (Triangle, ハーモニー)
   sequence[3] = parseMML("T120 O5 L8  C D E G  >C4      R G E C") # Ch1 (Saw, リード)
+  sequence[4] = parseMML("T120    L8  N4N4N8N8N4N4") # Ch5 (Noise, ドラム)
 
   ## 演奏データとして取り込み
   for i in 0..<MaxChannel:

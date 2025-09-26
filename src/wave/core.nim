@@ -8,7 +8,7 @@ import math
 
 const
   SampleRate* = 44100
-  MaxChannel* = 4
+  MaxChannel* = 5
   WaveSize = 32
   Notes = {
     'C': 261.63,
@@ -29,12 +29,15 @@ type
     freq*: float # 周波数(Hz)
     length*: int
 
-  Channel* = object
+  # 基底チャンネル
+  Channel* = ref object
     events*: seq[NoteEvent]
     playPos: int
     phase: float # 波形位置
     vol*: float # 音量(0.0～1.0)
     wave: array[WaveSize, int8] # 波形テーブル
+    lfsr: uint32 # LFSRレジスタ
+    lastOut: float # 直前の出力値
 
   Channels* = array[MaxChannel, Channel]
 
@@ -72,6 +75,35 @@ proc makeSawWave(): array[WaveSize, int8] =
 # Public Procedures
 # ******************************************************************************
 
+proc stepLFSR(self: Channel): float =
+  let bit = (self.lfsr xor (self.lfsr shr 1)) and 1
+  self.lfsr = (self.lfsr shr 1) or (bit shl 14)
+  if (self.lfsr and 1) == 1: 1.0 else: -1.0
+
+proc getSample(self: Channel, sampleRate: float, mix: var float) =
+  if self.events.len <= 0: return
+  let ev = self.events[0]
+  if self.wave.len == 0:
+    self.phase += ev.freq / sampleRate
+    if self.phase >= 1.0:
+      self.phase -= 1.0
+      self.lastOut = self.stepLFSR()
+      self.events[0].length.dec
+      if self.events[0].length <= 0:
+        self.events.delete(0)
+    mix += self.lastOut * self.vol
+  else:
+    if ev.freq > 0:
+      let pos = int(self.phase) mod WaveSize
+      mix += (float(self.wave[pos]) / 128.0) * self.vol
+      self.phase += ev.freq * WaveSize / sampleRate
+    # 音符の再生位置を更新し、終了した音符を削除
+    self.playPos.inc
+    if self.playPos >= ev.length:
+      self.playPos = 0
+      self.phase = 0
+      self.events.delete(0)
+
 ## オーディオコールバック
 proc processAudioBuffer*(buffer: pointer, frames: uint32) =
   # bufferをint16型の配列として扱うための型キャスト
@@ -83,20 +115,7 @@ proc processAudioBuffer*(buffer: pointer, frames: uint32) =
 
     # 各チャンネルのオーディオデータをミキシング
     for ch in mitems(channels):
-      if ch.events.len > 0:
-        let ev = ch.events[0]
-        if ev.freq > 0:
-          let pos = int(ch.phase) mod WaveSize
-          # 波形テーブルからサンプル値を取得し、音量とミキシング
-          mix += (float(ch.wave[pos]) / 128.0) * ch.vol
-          # 位相を進める（波形の位置を更新）
-          ch.phase += ev.freq * WaveSize / SampleRate
-        # 音符の再生位置を更新し、終了した音符を削除
-        ch.playPos.inc
-        if ch.playPos >= ev.length:
-          ch.playPos = 0
-          ch.phase = 0
-          ch.events.delete(0)
+      ch.getSample(SampleRate, mix)
 
     # クリッピング（音量が-1.0から1.0の範囲に収まるように制限）
     if mix > 1.0: mix = 1.0
@@ -108,14 +127,11 @@ proc processAudioBuffer*(buffer: pointer, frames: uint32) =
 
 ## チャンネル初期化
 proc initChannels*() =
-  channels[0].wave = makeSquareWave(25) # デューティ25%矩形波
-  channels[0].vol = 0.1
-  channels[1].wave = makeSquareWave(50) # デューティ50%矩形波
-  channels[1].vol = 0.1
-  channels[2].wave = makeTriangleWave() # 三角波
-  channels[2].vol = 0.3
-  channels[3].wave = makeSawWave() # ノコギリ波
-  channels[3].vol = 0.3
+  channels[0] = Channel(events: @[], vol: 0.1, wave: makeSquareWave(25)) # デューティ25%矩形波
+  channels[1] = Channel(events: @[], vol: 0.1, wave: makeSquareWave(50)) # デューティ50%矩形波
+  channels[2] = Channel(events: @[], vol: 0.3, wave: makeTriangleWave()) # 三角波
+  channels[3] = Channel(events: @[], vol: 0.3, wave: makeSawWave()) # ノコギリ波
+  channels[4] = Channel(events: @[], vol: 0.2, lfsr: 1, lastOut: 0.0) # ノイズ
 
 ## 音符の長さを取得
 proc getNoteLength(mml: string, idx: var int, defaultLen: int): int =
@@ -179,6 +195,14 @@ proc parseMML*(mml: string): seq[NoteEvent] =
         except ValueError:
           discard
       i = j-1
+    of 'N': # ノイズ命令
+      var len = defaultLen
+      if i+1 < mml.len and mml[i+1].isDigit:
+        len = parseInt($mml[i+1])
+        inc i
+      for ch in channels:
+        ch.events.add NoteEvent(freq: 440.0, length: len)  # freq は LFSR 更新速度として扱う
+        break
     of '<':
       dec octave
     of '>':
